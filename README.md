@@ -1,5 +1,75 @@
 # Engine Simulator
 ![Alt text](docs/public/screenshots/screenshot_v01.png?raw=true)
+
+## Live sound for sim racing
+
+This fork plays engine-sim audio from racing-sim telemetry without running the combustion simulation while you drive. `engine-sim-bake` renders an engine script into a grid of short loops. `engine-sim-live` crossfades those loops from RPM and throttle.
+
+The original simulator is still here, still MIT, Copyright 2022 Ange Yaghi (AngeTheGreat). The live tools are the same license.
+
+`profiles/subaru_ej25.eslb` is a baked Subaru EJ25, from `assets/engines/atg-video-2/01_subaru_ej25_eh.mr`. `docs/live/subaru_ej25_demo.wav` is the built-in test lap rendered through that profile.
+
+![Demo waveform](docs/live/subaru_ej25_demo.png)
+
+### Windows build
+
+Install CMake, a C++17 compiler, Boost, Flex, and Bison. Those are the same dependencies the original app uses. Clone with submodules so the script compiler is present.
+
+```
+git clone --recurse-submodules <this repo>
+cmake -S . -B build -DENGINE_SIM_HEADLESS=ON
+cmake --build build --config Release --target engine-sim-live engine-sim-bake
+```
+
+`ENGINE_SIM_HEADLESS=ON` skips the DirectX window. On Windows the default still builds the original GUI, which needs SDL2 and the delta-studio submodule. Use the headless flag when you only want the live tools.
+
+The Release player is `build\Release\engine-sim-live.exe` with the Visual Studio generator, or `build/engine-sim-live` with Makefiles. Play the built-in lap with no sim attached.
+
+```
+engine-sim-live --profile profiles\subaru_ej25.eslb --demo
+```
+
+`--demo` is an 8 second pull with two gear shifts. `--wav out.wav` writes a file instead of opening a sound device. `--replay lap.csv` plays a file whose header is `time_s,rpm,throttle,gear,speed_mps,load`. `python3 tools/check_live.py` runs the demo, checks that pitch follows RPM, checks that the shifts do not click, and checks a fake SimHub HTTP page plus a UDP packet.
+
+### SimHub
+
+Use either feed.
+
+HTTP needs no plugin. Turn on SimHub's HTTP API. The player polls `http://127.0.0.1:8888/api/getgamedata` and reads `Rpms`, `Throttle`, `Gear`, `SpeedKmh`, and `EngineLoad` when that field is present.
+
+```
+engine-sim-live --profile profiles\subaru_ej25.eslb --source simhub
+```
+
+The UDP plugin is `simhub/EngineSimLive`. Build it against the SimHub install. The project looks in `C:\Program Files (x86)\SimHub` unless you pass `-p:SimHubDir=...`. Copy `EngineSimLive.dll` into SimHub's `Plugins` folder and restart SimHub. It sends a 24-byte little-endian packet to `127.0.0.1:21377` on every data update. The bytes are `EST1`, version 1, flags, gear, then floats for rpm, throttle, load, and speed in meters per second. Flag bit 0 is ignition. Flag bit 1 means load is valid.
+
+```
+dotnet build simhub\EngineSimLive\EngineSimLive.csproj -c Release
+engine-sim-live --profile profiles\subaru_ej25.eslb --source udp
+```
+
+`--source auto` listens for that packet and also polls the HTTP API. A packet newer than half a second wins over HTTP. On Windows, `--source ac` reads Assetto Corsa shared memory at `Local\acpmf_physics`. Auto uses that mapping only when nothing else has arrived. The shared-memory path was not run against the game here.
+
+Gear is not a sound input. A shift is an RPM step. The player slews RPM over about 20 ms and fades loops over about 15 ms, so the join does not click.
+
+### Bake another engine
+
+The script defines `public node main` and that node calls `set_engine`, which is how the scripts in `assets/engines` are written. A script that only defines `main` is wrapped and called. From any working directory:
+
+```
+engine-sim-bake --script assets\engines\atg-video-2\03_2jz.mr --root <repo> --out profiles\2jz.eslb
+```
+
+`--root` is the repository root, so `es/` and the impulse-response wavs resolve. `--rpm` and `--demand` are comma-separated grids. The default grid is 1000, 2000, 3000, 4000, 5000, 6000 rpm and demand 0.15, 0.55, 1. Demand is engine load when the sender marks load valid, and throttle otherwise. Stay under the script redline. The rev limiter cuts spark and the recorded loop goes quiet.
+
+### CPU
+
+Measured on a 4 core Intel Xeon with load average 0.06. Both binaries were Release builds (`-O3`). Five runs alternated live and stock, about 5 seconds each. Process CPU is `getrusage` user plus system time, taken over the timed section only. Stock is the headless simulation and synthesizer held at 4000 rpm and demand 0.8, sleeping when it gets ahead of the clock. The original GUI was not in the process, so a windowed engine-sim costs at least this much. Live is `engine-sim-live --demo --realtime`.
+
+Per second of audio, the live player used 0.42% of one core. The mixer inside that number was 0.12% of one core. The stock headless sim used 59% of one core. Of the stock time, the simulation step was 78% and the synthesizer was 22%. The simulation step runs the rigid-body solver and the gas system. Its timer wraps `startFrame`, `simulateStep`, and `endFrame`. The synthesizer timer wraps `renderAudio`. The simulation step is the limiter. The live player does not run it.
+
+Median process CPU was 0.0208 s for 5.004 s of live audio, and 3.215 s for 5.490 s of stock audio. Stock produced a little more than 5 s of audio because each 20 ms step emits slightly more than 20 ms of samples. The 59% figure divides stock CPU by audio seconds, not by wall time.
+
 ---
 # Engine Simulator has moved!
 
