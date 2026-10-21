@@ -1,7 +1,6 @@
 #include "../include/synthesizer.h"
 
 #include "../include/utilities.h"
-#include "../include/delta.h"
 
 #include <cassert>
 #include <cmath>
@@ -26,6 +25,8 @@ Synthesizer::Synthesizer() {
     m_run = true;
     m_thread = nullptr;
     m_filters = nullptr;
+    m_latency = 0;
+    m_processed = true;
 }
 
 Synthesizer::~Synthesizer() {

@@ -22,6 +22,18 @@ set_property(GLOBAL PROPERTY PREDEFINED_TARGETS_FOLDER "cmake")
 
 project(engine-sim)
 
+if (NOT DEFINED ENGINE_SIM_HEADLESS)
+    if (WIN32)
+        set(ENGINE_SIM_HEADLESS OFF)
+    else()
+        set(ENGINE_SIM_HEADLESS ON)
+    endif()
+endif()
+
+if (ENGINE_SIM_HEADLESS)
+    set(DISCORD_ENABLED OFF CACHE BOOL "Discord rich presence" FORCE)
+endif()
+
 set(CMAKE_CXX_STANDARD 17)
 
 # ========================================================
@@ -136,8 +148,11 @@ add_library(engine-sim STATIC
 
 target_link_libraries(engine-sim
     simple-2d-constraint-solver
-    csv-io
-    delta-basic)
+    csv-io)
+
+if (NOT ENGINE_SIM_HEADLESS)
+    target_link_libraries(engine-sim delta-basic)
+endif()
 
 target_include_directories(engine-sim
     PUBLIC dependencies/submodules)
@@ -187,6 +202,7 @@ if (PIRANHA_ENABLED)
         PUBLIC dependencies/submodules)
 
     target_link_libraries(engine-sim-script-interpreter
+        engine-sim
         csv-io
         piranha)
 endif (PIRANHA_ENABLED)
@@ -203,6 +219,7 @@ if (DISCORD_ENABLED)
     )
 endif (DISCORD_ENABLED)
 
+if (NOT ENGINE_SIM_HEADLESS)
 add_executable(engine-sim-app WIN32
     # Source files
     src/main.cpp
@@ -298,8 +315,71 @@ endif (DISCORD_ENABLED)
 
 target_include_directories(engine-sim-app
     PUBLIC dependencies/submodules)
+endif()
+
+execute_process(
+    COMMAND python3 ${CMAKE_SOURCE_DIR}/tools/patch_gcc_compat.py
+    RESULT_VARIABLE _gcc_compat_rc
+)
+if (NOT _gcc_compat_rc EQUAL 0)
+    message(FATAL_ERROR "gcc compat patch failed")
+endif()
 
 add_subdirectory(dependencies)
+
+if (NOT MSVC)
+    foreach(_compat_target simple-2d-constraint-solver piranha engine-sim engine-sim-script-interpreter)
+        if (TARGET ${_compat_target})
+            target_compile_options(${_compat_target} PRIVATE
+                -include ${CMAKE_SOURCE_DIR}/cmake/gcc_compat.h)
+        endif()
+    endforeach()
+endif()
+
+add_executable(engine-sim-live
+    live/live_main.cpp
+    live/player.cpp
+    live/profile.cpp
+    live/wav_io.cpp
+    live/telemetry_io.cpp
+    live/audio_out.cpp
+)
+
+target_include_directories(engine-sim-live PRIVATE
+    live
+    live/third_party
+)
+
+if (WIN32)
+    target_link_libraries(engine-sim-live ws2_32 ole32 avrt)
+else()
+    target_link_libraries(engine-sim-live pthread)
+endif()
+
+if (PIRANHA_ENABLED)
+    add_executable(engine-sim-bake
+        live/bake_main.cpp
+        live/profile.cpp
+        live/wav_io.cpp
+    )
+
+    target_include_directories(engine-sim-bake PRIVATE
+        live
+        include
+        scripting/include
+    )
+
+    target_link_libraries(engine-sim-bake
+        engine-sim-script-interpreter
+        engine-sim
+    )
+
+    if (NOT WIN32)
+        target_link_libraries(engine-sim-bake pthread)
+        target_compile_options(engine-sim-bake PRIVATE
+            -include ${CMAKE_SOURCE_DIR}/cmake/gcc_compat.h)
+    endif()
+endif()
 
 # GTEST
 
@@ -316,6 +396,11 @@ target_link_libraries(engine-sim-test
     gtest_main
     engine-sim
 )
+
+if (NOT MSVC)
+    target_compile_options(engine-sim-test PRIVATE
+        -include ${CMAKE_SOURCE_DIR}/cmake/gcc_compat.h)
+endif()
 
 include(GoogleTest)
 gtest_discover_tests(engine-sim-test)
